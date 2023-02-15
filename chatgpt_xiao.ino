@@ -148,12 +148,12 @@ void loop()
           // Make a HTTP request          
           Serial.println("connect success!");
           client2.println(String("POST /v1/completions HTTP/1.1"));
-          client2.println(String("Host: ")+ chatgpt_server);          
+//          client2.println(String("Host: ")+ chatgpt_server);          
           client2.println(String("Content-Type: application/json"));
-          client2.println(String("Content-Length: ")+(73+chatgpt_Q.length()));
+//          client2.println(String("Content-Length: ")+(73+chatgpt_Q.length()));
           client2.println(String("Authorization: Bearer ")+ chatgpt_token);
-          client2.println("Connection: close");
-          client2.println();
+//          client2.println("Connection: close");
+//          client2.println();
           client2.println(String("{\"model\":\"text-davinci-003\",\"prompt\":\"")+ chatgpt_Q + String("\",\"temperature\":0,\"max_tokens\":100}"));
           json_String= "";
           currentState = get_chatgpt_list;
