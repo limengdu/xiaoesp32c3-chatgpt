@@ -6,9 +6,9 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 
-const char* ssid = "SEEED-MKT";
-const char* password = "depot0518";
-const char* chatgpt_token = "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";
+const char* ssid = "YOUR_SSED";
+const char* password = "YOUR_PASSWORD";
+const char* chatgpt_token = "YOUR_API_KEY";
 const char* chatgpt_Q = "\"Who are you\"";
 
 void setup() {

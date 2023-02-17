@@ -1,28 +1,28 @@
 // Load Wi-Fi library
 #include "WiFi.h"
+#include <HTTPClient.h>
 
 // Replace with your network credentials
-const char* ssid     = "SEEED-MKT";
-const char* password = "depot0518";
-
+const char* ssid     = "YOUR_SSID";
+const char* password = "YOUR_PASSWORD";
 //chatgpt api
-char chatgpt_server[] = "api.openai.com"; 
-const char* endpoint = "/v1/engines/davinci-codex/completions";
-const char* chatgpt_token = "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";
+const char* chatgpt_token = "YOUR_API_KEY";
+
+char chatgpt_server[] = "https://api.openai.com/v1/completions";
 
 // Set web server port number to 80
 WiFiServer server(80);
 WiFiClient client1;
-WiFiClient client2;
+
+HTTPClient https;
 
 String chatgpt_Q;
 String chatgpt_A;
 String json_String;
-uint8_t data_now = 0;
 uint16_t dataStart = 0;
 uint16_t dataEnd = 0;
 String dataStr;
-uint16_t chatgpt_num = 0;
+int httpCode = 0;
 
 typedef enum 
 {
@@ -122,7 +122,9 @@ void loop()
                 Serial.println(json_String); 
                 dataStart = json_String.indexOf("chatgpttext=") + strlen("chatgpttext="); // parse the request for the following content
                 chatgpt_Q = json_String.substring(dataStart, json_String.length());                    
-                client1.print(html_page);        
+                client1.print(html_page);
+                Serial.print("Your Question is: ");
+                Serial.println(chatgpt_Q);
                 // close the connection:
                 delay(10);
                 client1.stop();       
@@ -146,76 +148,41 @@ void loop()
       break;
     case send_chatgpt_request:
       Serial.println("Ask ChatGPT a Question Task Launch");
-      if (client2.connect(chatgpt_server,443)){
-          delay(3000);
-          // Make a HTTP request          
-          Serial.println("connect success!");
-
-//          String headers = "POST " + String(endpoint) + " HTTP/1.1\r\n";
-//          headers += "Host: " + String(server) + "\r\n";
-//          headers += "Content-Type: application/json\r\n";
-//          headers += "Authorization: Bearer " + String(chatgpt_token) + "\r\n";
-//          headers += "User-Agent: XIAOESP32\r\n";
-//          headers += "Content-Length: " + String(73+chatgpt_Q.length()) + "\r\n";
-//          headers += "{\"model\":\"text-davinci-003\",\"prompt\":\"" + String(chatgpt_Q) + "\",\"temperature\":0,\"max_tokens\":100}" + "\r\n\r\n";
-
-          // Send the request headers and body
-//          client2.print(headers);
-
-
-//          client2.println(String("POST /v1/completions HTTP/1.1"));
-          client2.println(String("POST v1/models HTTP/1.1"));
-          client2.println(String("Host: ")+ chatgpt_server);          
-//          client2.println(String("Content-Type: application/json"));
-//          client2.println(String("Content-Length: ")+(73+chatgpt_Q.length()));
-          client2.println(String("Authorization: Bearer ")+ chatgpt_token);
-          client2.println("Connection: close");
-          client2.println();
-//          client2.println(String("{\"model\":\"text-davinci-003\",\"prompt\":\"")+ chatgpt_Q + String("\",\"temperature\":0,\"max_tokens\":100}"));
-          json_String= "";
-          currentState = get_chatgpt_list;
+      if (https.begin(chatgpt_server)) {  // HTTPS
+        https.addHeader("Content-Type", "application/json"); 
+        String token_key = String("Bearer ") + chatgpt_token;
+        https.addHeader("Authorization", token_key);
+        String payload = String("{\"model\": \"text-davinci-003\", \"prompt\": \"") + chatgpt_Q + String("\", \"temperature\": 0, \"max_tokens\": 100}"); //Instead of TEXT as Payload, can be JSON as Paylaod
+        httpCode = https.POST(payload);   // start connection and send HTTP header
+        payload = "";
+        currentState = get_chatgpt_list;
       }
-      else
-      {
-        Serial.println("connect failed!");
-        client2.stop();
+      else {
+        Serial.println("[HTTPS] Unable to connect");
         delay(1000);
       }
       break;
     case get_chatgpt_list:
       Serial.println("Get ChatGPT Answers Task Launch");
-      
-      while (client2.available()) {
-        json_String += (char)client2.read(); 
-//        Serial.print(json_String);
-      }
-
-      if (!json_String.startsWith("HTTP/1.1 200 OK")) {
-        Serial.println("Response error");
-        Serial.println(json_String);
-        client2.stop();
-        currentState = do_webserver_index;
-        data_now =1;
-        delay(1000);
-      }
-      
-      if(data_now)
-      {
-        Serial.println(json_String);
-        dataStart = json_String.indexOf("\"text\":\"") + strlen("\"text\":\"");
-        dataEnd = json_String.indexOf("\",\"", dataStart); 
-        chatgpt_A = json_String.substring(dataStart+4, dataEnd);
+      // httpCode will be negative on error      
+      // file found at server
+      if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_MOVED_PERMANENTLY) {
+        String payload = https.getString();
+//        Serial.println(payload);
+        dataStart = payload.indexOf("\\n\\n") + strlen("\\n\\n");
+        dataEnd = payload.indexOf("\",\"", dataStart); 
+        chatgpt_A = payload.substring(dataStart, dataEnd);
+        Serial.print("ChatGPT Answer is: ");
         Serial.println(chatgpt_A);
-        chatgpt_Q.replace("+", " ");
-        Serial.println(chatgpt_Q);         
-        
-        chatgpt_num++;
-        json_String = "";
-        data_now =0;
-        client2.stop();
-        delay(1000);
+        Serial.println("Wait 10s before next round...");
         currentState = do_webserver_index;
       }
+      else {
+        Serial.printf("[HTTPS] GET... failed, error: %s\n", https.errorToString(httpCode).c_str());
+        while(1);
+      }
+      https.end();
+      delay(10000);
       break;
   }
 }
