@@ -170,7 +170,7 @@ void loop()
         String payload = https.getString();
 //        Serial.println(payload);
         dataStart = payload.indexOf("\\n\\n") + strlen("\\n\\n");
-        dataEnd = payload.indexOf("\",\"", dataStart); 
+        dataEnd = payload.indexOf("\",", dataStart); 
         chatgpt_A = payload.substring(dataStart, dataEnd);
         Serial.print("ChatGPT Answer is: ");
         Serial.println(chatgpt_A);
