@@ -152,7 +152,7 @@ void loop()
         https.addHeader("Content-Type", "application/json"); 
         String token_key = String("Bearer ") + chatgpt_token;
         https.addHeader("Authorization", token_key);
-        String payload = String("{\"model\": \"text-davinci-003\", \"prompt\": \"") + chatgpt_Q + String("\", \"temperature\": 0, \"max_tokens\": 100}"); //Instead of TEXT as Payload, can be JSON as Paylaod
+        String payload = String("{\"model\": \"gpt-3.5-turbo-instruct\", \"prompt\": \"") + chatgpt_Q + String("\", \"temperature\": 0, \"max_tokens\": 100}"); //Instead of TEXT as Payload, can be JSON as Paylaod
         httpCode = https.POST(payload);   // start connection and send HTTP header
         payload = "";
         currentState = get_chatgpt_list;
