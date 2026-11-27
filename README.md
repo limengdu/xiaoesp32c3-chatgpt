@@ -10,7 +10,7 @@ It is able to carry out conversations by learning and understanding human langua
 
 In embedded systems, ChatGPT can be a good helper to assist us in writing simple programs, or even checking and fixing bugs that appear in the program.
 
-What is exciting is that OpenAI officially provides interfaces to call GPT-3 models, which allows us to call these interfaces and deploy this great model into our own embedded systems through a number of methods.
+What is exciting is that OpenAI officially provides a Chat Completions API, which allows us to call current ChatGPT models and deploy them into our own embedded systems through a number of methods.
 
 Seeed Studio XIAO ESP32C3 is an IoT mini development board based on the Espressif ESP32-C3 WiFi/Bluetooth dual-mode chip. It has excellent radio frequency performance, supporting IEEE 802.11 b/g/n WiFi, and Bluetooth 5 (LE) protocols. It can perfectly support the services of WiFi Client and WiFi Server provided by ESP32 official. Of course, it is able to support Arduino perfectly.
 
@@ -231,7 +231,9 @@ if (client1){
                     }
                     Serial.println(json_String); 
                     dataStart = json_String.indexOf("chatgpttext=") + strlen("chatgpttext=");
-                    chatgpt_Q = json_String.substring(dataStart, json_String.length());                    
+                    chatgpt_Q = json_String.substring(dataStart, json_String.length());
+                    chatgpt_Q.trim();
+                    chatgpt_Q = urlDecode(chatgpt_Q);
                     client1.print(html_page);        
                     // close the connection:
                     delay(10);
@@ -290,7 +292,9 @@ while(client1.available()){
 }
 Serial.println(json_String); 
 dataStart = json_String.indexOf("chatgpttext=") + strlen("chatgpttext=");
-chatgpt_Q = json_String.substring(dataStart, json_String.length());                    
+chatgpt_Q = json_String.substring(dataStart, json_String.length());
+chatgpt_Q.trim();
+chatgpt_Q = urlDecode(chatgpt_Q);
 client1.print(html_page);        
 // close the connection:
 delay(10);
@@ -333,16 +337,20 @@ char chatgpt_token[] = "sk**********Rj9DYiXLJJH";
 
 **Step 3**. Write the program according to the HTTP requests of OpenAI.
 
-OpenAI provides very detailed [API usage instructions](https://platform.openai.com/docs/api-reference/making-requests) so that users can use their own API key to call ChatGPT.
+OpenAI provides very detailed [API usage instructions](https://developers.openai.com/api/docs/api-reference/chat/create) so that users can use their own API key to call ChatGPT.
+
+Current ChatGPT models use the Chat Completions API. These examples default to [`gpt-6-luna`](https://developers.openai.com/api/docs/models/gpt-6-luna), an inexpensive model that fits an ESP32C3 Q&A demo. Change the `chatgpt_model` string in the sketch if you want another Chat Completions model.
 
 According to the documentation of ChatGPT, the format we need to send the request is as follows:
 
 ```shell
-curl https://api.openai.com/v1/completions \
+curl https://api.openai.com/v1/chat/completions \
 -H "Content-Type: application/json" \
 -H "Authorization: Bearer YOUR_API_KEY" \
--d '{"model": "gpt-3.5-turbo-instruct", "prompt": "Say this is a test", "temperature": 0, "max_tokens": 7}'
+-d '{"model": "gpt-6-luna", "messages": [{"role": "user", "content": "Say this is a test"}], "reasoning_effort": "none", "max_completion_tokens": 64}'
 ```
+
+`reasoning_effort` set to `none` keeps the on-device demo fast and inexpensive. Chat Completions uses a `messages` array rather than `prompt`, and `max_completion_tokens` is the current token-limit field.
 
 The Hypertext Transfer Protocol (HTTP) works as a request-response protocol between a client and server.
 **GET** is used to request data from a specified resource. It is often used to get values from APIs.
@@ -361,17 +369,19 @@ You also need to type OpenAI domain name, so the ESP publishes the question to C
 HTTPClient https;
 
 const char* chatgpt_token = "YOUR_API_KEY";
-char chatgpt_server[] = "https://api.openai.com/v1/completions";
+const char* chatgpt_model = "gpt-6-luna";
+char chatgpt_server[] = "https://api.openai.com/v1/chat/completions";
 ```
 
-We need to make an HTTP POST request using JSON object.
+We need to make an HTTP POST request using JSON object. The question from the web form is URL-decoded, then JSON-escaped, so quotes and line breaks stay valid inside the `messages` payload.
 
 ```c
 if (https.begin(chatgpt_server)) {  // HTTPS
+    https.setTimeout(30000);
     https.addHeader("Content-Type", "application/json"); 
     String token_key = String("Bearer ") + chatgpt_token;
     https.addHeader("Authorization", token_key);
-    String payload = String("{\"model\": \"gpt-3.5-turbo-instruct\", \"prompt\": \"") + chatgpt_Q + String("\", \"temperature\": 0, \"max_tokens\": 100}"); //Instead of TEXT as Payload, can be JSON as Paylaod
+    String payload = buildChatCompletionsPayload(chatgpt_Q, 256);
     httpCode = https.POST(payload);   // start connection and send HTTP header
     payload = "";
 }
@@ -390,40 +400,42 @@ If you are interested in more features of the ESP32C3 HTTPClient, we recommend y
 
 The next step is the last step of the whole tutorial, how we get the answer to ChatGPT and record it.
 
-Let's continue from reading the [API documentation](https://platform.openai.com/docs/api-reference/making-requests) provided by OpenAI to understand how the structure of the message content returned by ChatGPT looks like. This will allow us to write programs to parse the content we need.
+Let's continue from reading the [API documentation](https://developers.openai.com/api/docs/api-reference/chat/create) provided by OpenAI to understand how the structure of the message content returned by ChatGPT looks like. This will allow us to write programs to parse the content we need.
 
 ```shell
 {
-  "id": "cmpl-uqkvlQyYK7bGYrRHQ0eXlWi7",
-  "object": "text_completion",
-  "created": 1589478378,
-  "model": "gpt-3.5-turbo-instruct",
-  "system_fingerprint": "fp_44709d6fcb",
+  "id": "chatcmpl-B9MBs8CjcvOU2jLn4n570S5qMJKcT",
+  "object": "chat.completion",
+  "created": 1741569952,
+  "model": "gpt-6-luna",
   "choices": [
     {
-      "text": "\n\nThis is indeed a test",
       "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "This is indeed a test",
+        "refusal": null,
+        "annotations": []
+      },
       "logprobs": null,
-      "finish_reason": "length"
+      "finish_reason": "stop"
     }
   ],
   "usage": {
-    "prompt_tokens": 5,
-    "completion_tokens": 7,
-    "total_tokens": 12
+    "prompt_tokens": 12,
+    "completion_tokens": 6,
+    "total_tokens": 18
   }
 }
 
 ```
 
-From the reference documentation provided by OpenAI, we know that the location of the answer to the question in the message returned by the interface is in `{"choices": [{"text": "\n\nxxxxxxx",}]}`.
+From the reference documentation provided by OpenAI, we know that the location of the answer to the question in the message returned by the interface is in `choices[0].message.content`.
 
-So now we can be sure that the "Answer" we need should start with **\n\n** and end with **,**. Then, in the program, we can retrieve the position where the text starts and ends by using the `indexOf()` method, and store the content of the returned answer.
+The complete example finds the `"content"` string after `"message"` and unescapes JSON so the serial monitor shows the assistant text.
 
 ```c
-dataStart = payload.indexOf("\\n\\n") + strlen("\\n\\n");
-dataEnd = payload.indexOf("\",", dataStart); 
-chatgpt_A = payload.substring(dataStart, dataEnd);
+chatgpt_A = extractAssistantContent(payload);
 ```
 
 In summary, we can use the switch method with the current state of the program to determine which step of the program we should execute.
