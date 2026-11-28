@@ -166,13 +166,10 @@ After entering this IP address, we may only see a blank page. This is because we
 
 So let's now create an array to store the content of the page we want to layout, which is the HTML code, in C.
 
+The sketch sends the HTTP status line separately (`200`, `408`, or `413`) and then this HTML. Question and answer text are appended with HTML escaping.
+
 ```c
 const char html_page[] PROGMEM = {
-    "HTTP/1.1 200 OK\r\n"
-    "Content-Type: text/html\r\n"
-    "Connection: close\r\n"  // the connection will be closed after completion of the response
-    //"Refresh: 1\r\n"         // refresh the page automatically every n sec
-    "\r\n"
     "<!DOCTYPE HTML>\r\n"
     "<html>\r\n"
     "<head>\r\n"
@@ -208,47 +205,62 @@ This code gives us the page effect shown in the figure below.
 
 Client1 refers to the Socket client after the web server is established, the following code is the flow of web server processing.
 
+The request line and headers are read line by line until the blank line that ends the headers. `Content-Length` is parsed so the POST body can be collected in full when TCP delivers the form in several packets.
+
 ```c
 client1 = server.available();
 if (client1){
-    Serial.println("New Client.");           // print a message out the serial port
-    // an http request ends with a blank line
-    boolean currentLineIsBlank = true;    
+    Serial.println("New Client.");
+    String requestLine = readHttpLine(client1);
+    Serial.println(requestLine);
+
+    int contentLength = 0;
     while (client1.connected()){
-        if (client1.available()){  // Check if the client is connected
-            char c = client1.read();
-            json_String += c;
-            if (c == '\n' && currentLineIsBlank) {                                 
-                dataStr = json_String.substring(0, 4);
-                Serial.println(dataStr);
-                if(dataStr == "GET "){
-                    client1.print(html_page);  //Send the response body to the client
-                }         
-                else if(dataStr == "POST"){
-                    json_String = "";
-                    while(client1.available()){
-                        json_String += (char)client1.read();
-                    }
-                    Serial.println(json_String); 
-                    dataStart = json_String.indexOf("chatgpttext=") + strlen("chatgpttext=");
-                    chatgpt_Q = json_String.substring(dataStart, json_String.length());
-                    chatgpt_Q.trim();
-                    chatgpt_Q = urlDecode(chatgpt_Q);
-                    client1.print(html_page);        
-                    // close the connection:
-                    delay(10);
-                    client1.stop();       
+        String header = readHttpLine(client1);
+        if (header.length() == 0) {
+            break;
+        }
+        String lower = header;
+        lower.toLowerCase();
+        if (lower.startsWith("content-length:")) {
+            contentLength = header.substring(header.indexOf(':') + 1).toInt();
+        }
+    }
+
+    if (requestLine.startsWith("GET ")){
+        sendHtmlPage(client1, 200, "OK");
+    }
+    else if (requestLine.startsWith("POST ")){
+        if (contentLength <= 0 || contentLength > MAX_POST_BYTES) {
+            sendHtmlPage(client1, 413, "Payload Too Large");
+        } else {
+            json_String = "";
+            json_String.reserve(contentLength);
+            unsigned long started = millis();
+            while ((int)json_String.length() < contentLength && millis() - started < CLIENT_TIMEOUT_MS) {
+                while (client1.available() && (int)json_String.length() < contentLength) {
+                    json_String += (char)client1.read();
                 }
-                json_String = "";
-                break;
+                if (!client1.connected() && !client1.available()) {
+                    break;
+                }
+                delay(1);
             }
-            if (c == '\n') {
-                // you're starting a new line
-                currentLineIsBlank = true;
-            }
-            else if (c != '\r') {
-                // you've gotten a character on the current line
-                currentLineIsBlank = false;
+            if ((int)json_String.length() != contentLength) {
+                sendHtmlPage(client1, 408, "Request Timeout");
+            } else {
+                Serial.println(json_String);
+                dataStart = json_String.indexOf("chatgpttext=") + strlen("chatgpttext=");
+                chatgpt_Q = json_String.substring(dataStart, json_String.length());
+                int amp = chatgpt_Q.indexOf('&');
+                if (amp >= 0) {
+                    chatgpt_Q = chatgpt_Q.substring(0, amp);
+                }
+                chatgpt_Q.trim();
+                chatgpt_Q = urlDecode(chatgpt_Q);
+                sendHtmlPage(client1, 200, "OK");
+                delay(10);
+                client1.stop();
             }
         }
     }
@@ -275,27 +287,37 @@ void setup()
 }
 ```
 
-Once the above program is run and the IP address of the XIAO ESP32C3 is entered into the browser (provided that your host also needs to be on the same LAN as the XIAO ESP32C3), then the GET step of WiFiClient will start to execute. At this point, with the help of the client-side print method, we submit the HTML code of the page.
+Once the above program is run and the IP address of the XIAO ESP32C3 is entered into the browser (provided that your host also needs to be on the same LAN as the XIAO ESP32C3), then the GET step of WiFiClient will start to execute. At this point we send the page HTML, including any previous question and answer with HTML escaping.
 
 ```c
-if(dataStr == "GET "){
-    client1.print(html_page);
+if (requestLine.startsWith("GET ")){
+    sendHtmlPage(client1, 200, "OK");
 }
 ```
 
 And, we design the input box for question input in the page, the web page will get the status of the button and store the input question into the string variable `chatgpt_Q` after the user enters the content and clicks the **Submit** button.
 
+The POST body is read until exactly `Content-Length` bytes have arrived (with an 8-second timeout). Question and answer text are HTML-escaped before they are written back into the page.
+
 ```c
 json_String = "";
-while(client1.available()){
-    json_String += (char)client1.read();
+json_String.reserve(contentLength);
+unsigned long started = millis();
+while ((int)json_String.length() < contentLength && millis() - started < CLIENT_TIMEOUT_MS) {
+    while (client1.available() && (int)json_String.length() < contentLength) {
+        json_String += (char)client1.read();
+    }
+    if (!client1.connected() && !client1.available()) {
+        break;
+    }
+    delay(1);
 }
 Serial.println(json_String); 
 dataStart = json_String.indexOf("chatgpttext=") + strlen("chatgpttext=");
 chatgpt_Q = json_String.substring(dataStart, json_String.length());
 chatgpt_Q.trim();
 chatgpt_Q = urlDecode(chatgpt_Q);
-client1.print(html_page);        
+sendHtmlPage(client1, 200, "OK");
 // close the connection:
 delay(10);
 client1.stop();      
