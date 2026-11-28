@@ -12,6 +12,9 @@ const char* chatgpt_model = "gpt-6-luna";  // Change this string to use another 
 
 char chatgpt_server[] = "https://api.openai.com/v1/chat/completions";
 
+const unsigned long CLIENT_TIMEOUT_MS = 8000;
+const int MAX_POST_BYTES = 4096;
+
 // Set web server port number to 80
 WiFiServer server(80);
 WiFiClient client1;
@@ -23,7 +26,6 @@ String chatgpt_A;
 String json_String;
 uint16_t dataStart = 0;
 uint16_t dataEnd = 0;
-String dataStr;
 int httpCode = 0;
 
 typedef enum
@@ -78,6 +80,45 @@ String urlDecode(const String &src) {
     }
   }
   return out;
+}
+
+String htmlEscape(const String &src) {
+  String out;
+  out.reserve(src.length() + 16);
+  for (unsigned int i = 0; i < src.length(); i++) {
+    char c = src[i];
+    switch (c) {
+      case '&':  out += "&amp;";  break;
+      case '<':  out += "&lt;";   break;
+      case '>':  out += "&gt;";   break;
+      case '"':  out += "&quot;"; break;
+      case '\'': out += "&#39;";  break;
+      default:   out += c;        break;
+    }
+  }
+  return out;
+}
+
+String readHttpLine(WiFiClient &client) {
+  String line;
+  unsigned long started = millis();
+  while (millis() - started < CLIENT_TIMEOUT_MS) {
+    while (client.available()) {
+      char c = (char)client.read();
+      if (c == '\n') {
+        if (line.endsWith("\r")) {
+          line.remove(line.length() - 1);
+        }
+        return line;
+      }
+      line += c;
+    }
+    if (!client.connected() && !client.available()) {
+      break;
+    }
+    delay(1);
+  }
+  return line;
 }
 
 String jsonUnescape(const String &src) {
@@ -175,11 +216,6 @@ void WiFiConnect(void){
 }
 
 const char html_page[] PROGMEM = {
-    "HTTP/1.1 200 OK\r\n"
-    "Content-Type: text/html\r\n"
-    "Connection: close\r\n"  // the connection will be closed after completion of the response
-    //"Refresh: 1\r\n"         // refresh the page automatically every n sec
-    "\r\n"
     "<!DOCTYPE HTML>\r\n"
     "<html>\r\n"
     "<head>\r\n"
@@ -200,9 +236,31 @@ const char html_page[] PROGMEM = {
     "</form>"
     "</div>"
     "</p>\r\n"
-    "</body>\r\n"
-    "<html>\r\n"
 };
+
+void sendHtmlPage(WiFiClient &client, int statusCode, const char *statusText) {
+  client.print("HTTP/1.1 ");
+  client.print(statusCode);
+  client.print(" ");
+  client.print(statusText);
+  client.print("\r\n");
+  client.print("Content-Type: text/html\r\n");
+  client.print("Connection: close\r\n");
+  client.print("\r\n");
+  client.print(html_page);
+  if (chatgpt_Q.length() > 0) {
+    client.print("<h3 align=\"center\">Question</h3><pre>");
+    client.print(htmlEscape(chatgpt_Q));
+    client.print("</pre>");
+  }
+  if (chatgpt_A.length() > 0) {
+    client.print("<h3 align=\"center\">Answer</h3><pre>");
+    client.print(htmlEscape(chatgpt_A));
+    client.print("</pre>");
+  }
+  client.print("</body>\r\n");
+  client.print("<html>\r\n");
+}
 
 void setup()
 {
@@ -228,52 +286,67 @@ void loop()
       client1 = server.available();              // Check if the client is connected
       if (client1){
         Serial.println("New Client.");           // print a message out the serial port
-        // an http request ends with a blank line
-        boolean currentLineIsBlank = true;
-        while (client1.connected()){
-          if (client1.available()){
-            char c = client1.read();             // Read the rest of the content, used to clear the cache
-            json_String += c;
-            if (c == '\n' && currentLineIsBlank) {
-              dataStr = json_String.substring(0, 4);
-              Serial.println(dataStr);
-              if(dataStr == "GET "){
-                client1.print(html_page);        //Send the response body to the client
+        String requestLine = readHttpLine(client1);
+        Serial.println(requestLine);
+
+        int contentLength = 0;
+        while (client1.connected()) {
+          String header = readHttpLine(client1);
+          if (header.length() == 0) {
+            break;
+          }
+          String lower = header;
+          lower.toLowerCase();
+          if (lower.startsWith("content-length:")) {
+            contentLength = header.substring(header.indexOf(':') + 1).toInt();
+          }
+        }
+
+        if (requestLine.startsWith("GET ")) {
+          sendHtmlPage(client1, 200, "OK");
+        } else if (requestLine.startsWith("POST ")) {
+          if (contentLength <= 0 || contentLength > MAX_POST_BYTES) {
+            sendHtmlPage(client1, 413, "Payload Too Large");
+          } else {
+            json_String = "";
+            json_String.reserve(contentLength);
+            unsigned long started = millis();
+            // TCP may deliver the form body in several packets; wait for Content-Length bytes.
+            while ((int)json_String.length() < contentLength && millis() - started < CLIENT_TIMEOUT_MS) {
+              while (client1.available() && (int)json_String.length() < contentLength) {
+                json_String += (char)client1.read();
               }
-              else if(dataStr == "POST"){
-                json_String = "";
-                while(client1.available()){
-                  json_String += (char)client1.read();
-                }
-                Serial.println(json_String);
-                dataStart = json_String.indexOf("chatgpttext=") + strlen("chatgpttext="); // parse the request for the following content
-                chatgpt_Q = json_String.substring(dataStart, json_String.length());
-                int amp = chatgpt_Q.indexOf('&');
-                if (amp >= 0) {
-                  chatgpt_Q = chatgpt_Q.substring(0, amp);
-                }
-                chatgpt_Q.trim();
-                chatgpt_Q = urlDecode(chatgpt_Q);
-                client1.print(html_page);
-                Serial.print("Your Question is: ");
-                Serial.println(chatgpt_Q);
-                // close the connection:
-                delay(10);
-                client1.stop();
-                currentState = send_chatgpt_request;
+              if (!client1.connected() && !client1.available()) {
+                break;
               }
-              json_String = "";
-              break;
+              delay(1);
             }
-            if (c == '\n') {
-              // you're starting a new line
-              currentLineIsBlank = true;
-            }
-            else if (c != '\r') {
-              // you've gotten a character on the current line
-              currentLineIsBlank = false;
+            if ((int)json_String.length() != contentLength) {
+              sendHtmlPage(client1, 408, "Request Timeout");
+            } else {
+              Serial.println(json_String);
+              dataStart = json_String.indexOf("chatgpttext=") + strlen("chatgpttext=");
+              chatgpt_Q = json_String.substring(dataStart, json_String.length());
+              int amp = chatgpt_Q.indexOf('&');
+              if (amp >= 0) {
+                chatgpt_Q = chatgpt_Q.substring(0, amp);
+              }
+              chatgpt_Q.trim();
+              chatgpt_Q = urlDecode(chatgpt_Q);
+              chatgpt_A = "";
+              sendHtmlPage(client1, 200, "OK");
+              Serial.print("Your Question is: ");
+              Serial.println(chatgpt_Q);
+              delay(10);
+              client1.stop();
+              currentState = send_chatgpt_request;
             }
           }
+        }
+        json_String = "";
+        if (client1.connected()) {
+          delay(10);
+          client1.stop();
         }
       }
       delay(1000);
